@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, Clock, Wrench, Zap, TrendingUp, Activity } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock, Wrench, Zap, TrendingUp, Activity, RefreshCw, Mail } from 'lucide-react';
 import { getDashboard } from '../services/api';
 import type { DashboardData } from '../types';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { LoadingScreen } from '../components/ui/Spinner';
-import { severityColor, statusColor, formatMileage, timeAgo } from '../lib/utils';
+import { severityColor, formatMileage, timeAgo, formatDateTime } from '../lib/utils';
 
 export function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -22,16 +22,17 @@ export function Dashboard() {
 
   if (loading) return <LoadingScreen />;
   if (error || !data) return (
-    <div className="p-8 text-red-600">Failed to load dashboard: {error}</div>
+    <div className="p-4 md:p-8 text-red-600">Failed to load dashboard: {error}</div>
   );
 
-  const { fleet_stats, risk_score, critical_alerts, upcoming_maintenance, recent_agent_actions } = data;
+  const { fleet_stats, risk_score, critical_alerts, upcoming_maintenance, recent_agent_actions, automation } = data;
+  const lastScan = automation?.last_scan ?? null;
 
   const riskColor = risk_score >= 70 ? 'text-red-600' : risk_score >= 40 ? 'text-amber-600' : 'text-emerald-600';
   const riskBg = risk_score >= 70 ? 'bg-red-50 border-red-200' : risk_score >= 40 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200';
 
   return (
-    <div className="p-8">
+    <div className="p-4 md:p-8">
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-slate-900">Fleet Dashboard</h1>
@@ -51,7 +52,7 @@ export function Dashboard() {
           value={fleet_stats.healthy}
           icon={<CheckCircle2 className="w-5 h-5 text-emerald-600" />}
           color="bg-emerald-50"
-          sub={`${Math.round((fleet_stats.healthy / fleet_stats.total) * 100)}% of fleet`}
+          sub={fleet_stats.total ? `${Math.round((fleet_stats.healthy / fleet_stats.total) * 100)}% of fleet` : undefined}
         />
         <KpiCard
           label="Maintenance Due"
@@ -68,7 +69,7 @@ export function Dashboard() {
       </div>
 
       {/* Second row */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-6">
         {/* Risk Score */}
         <Card className={`border ${riskBg}`}>
           <div className="flex items-center justify-between mb-3">
@@ -101,6 +102,44 @@ export function Dashboard() {
               Review tasks →
             </Link>
           )}
+        </Card>
+
+        {/* Proactive scan */}
+        <Card>
+          <div className="flex items-center gap-2 mb-3">
+            <RefreshCw className="w-4 h-4 text-slate-500" />
+            <span className="text-sm font-medium text-slate-600">Proactive Scan</span>
+            {automation?.scheduler_running && (
+              <span className="ml-auto text-[10px] uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">
+                Scheduled
+              </span>
+            )}
+          </div>
+          {lastScan ? (
+            <>
+              <div className="text-2xl font-bold text-slate-900 mb-1">
+                {lastScan.ran_at ? timeAgo(lastScan.ran_at) : '—'}
+              </div>
+              <p className="text-xs text-slate-500">
+                Last run · <span className="font-mono">{lastScan.triggered_by}</span>
+              </p>
+              <p className="text-xs text-slate-600 mt-2">
+                {lastScan.overdue ?? 0} overdue · {lastScan.recalls ?? 0} recall{(lastScan.recalls ?? 0) === 1 ? '' : 's'} · {lastScan.tasks_created ?? 0} tasks created
+              </p>
+              {lastScan.digest_email_status && (
+                <p className="text-xs text-slate-500 mt-1 flex items-center gap-1">
+                  <Mail className="w-3 h-3" /> Digest email {lastScan.digest_email_status.toLowerCase()}
+                  {lastScan.digest_provider ? ` · ${lastScan.digest_provider}` : ''}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-sm text-slate-500">No scan has run yet.</p>
+          )}
+          <p className="text-xs text-slate-400 mt-3">
+            Next: {automation?.next_run_at ? formatDateTime(automation.next_run_at) : 'not scheduled'}
+            {automation?.timezone ? ` (${automation.timezone.split('/').pop()})` : ''}
+          </p>
         </Card>
 
         {/* AI Activity */}

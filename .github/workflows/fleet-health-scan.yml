@@ -1,0 +1,27 @@
+name: FleetPilot — daily fleet health scan
+
+# External proactive trigger (free alternative to Cloud Scheduler).
+# 03:00 UTC == 06:00 Africa/Addis_Ababa.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger fleet health scan
+        env:
+          API_URL: ${{ secrets.FLEETPILOT_API_URL }}
+          TOKEN: ${{ secrets.FLEETPILOT_SCHEDULER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${API_URL:-}" ] || [ -z "${TOKEN:-}" ]; then
+            echo "FLEETPILOT_API_URL / FLEETPILOT_SCHEDULER_TOKEN secrets are not set"; exit 1
+          fi
+          curl --fail --silent --show-error --max-time 300 \
+            -X POST "${API_URL%/}/api/automation/fleet-health-scan?source=github-actions" \
+            -H "X-Scheduler-Token: ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{}' | python3 -c 'import sys,json; d=json.load(sys.stdin)["data"]; print({k:d[k] for k in ("vehicles_scanned","overdue_found","upcoming_found","recalls_found","tasks_created","reminders_sent","digest_email_status")})'

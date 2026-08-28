@@ -42,7 +42,7 @@ export interface Incident {
   severity?: IncidentSeverity;
   category?: string;
   status: IncidentStatus;
-  ai_analysis?: IncidentAnalysis;
+  ai_analysis?: IncidentAnalysis | null;
   created_at: string;
   updated_at?: string;
   agent_actions?: AgentAction[];
@@ -67,7 +67,21 @@ export interface IncidentAnalysis {
   possible_causes: string[];
   recommended_actions: string[];
   required_parts: { name: string; quantity: number }[];
+  related_recalls?: string[];
   requires_manager_approval: boolean;
+}
+
+/** Response of POST /api/incidents/{id}/analyze */
+export interface AnalyzeResult {
+  incident_id: string;
+  analysis: IncidentAnalysis | null;
+  agent_actions: AgentAction[];
+  status: IncidentStatus;
+  provider?: string;
+  analysis_source?: 'model' | 'synthesized_from_actions';
+  demo_mode?: boolean;
+  demo_reason?: string;
+  error?: string;
 }
 
 export interface MaintenanceTask {
@@ -83,9 +97,11 @@ export interface MaintenanceTask {
   ai_generated: boolean;
   created_at: string;
   updated_at?: string;
-  vehicle?: { fleet_number: string; make: string; model: string; year: number };
+  vehicle?: { fleet_number: string; make: string; model: string; year: number } | null;
   parts_count?: number;
   parts_requests?: PartsRequest[];
+  vehicle_status?: VehicleStatus | null;
+  vehicle_restored?: boolean;
 }
 
 export interface MaintenanceTaskSummary {
@@ -129,6 +145,30 @@ export interface AgentAction {
   incident_id?: string;
 }
 
+export interface LastScan {
+  id: string;
+  ran_at: string | null;
+  triggered_by: string;
+  description?: string;
+  overdue?: number;
+  upcoming?: number;
+  recalls?: number;
+  tasks_created?: number;
+  notifications_sent?: number;
+  reminders_sent?: number;
+  digest_provider?: string;
+  digest_email_status?: string | null;
+  duration_s?: number;
+}
+
+export interface AutomationSummary {
+  last_scan: LastScan | null;
+  next_run_at: string | null;
+  schedule_cron: string;
+  timezone: string;
+  scheduler_running: boolean;
+}
+
 export interface DashboardData {
   fleet_stats: {
     total: number;
@@ -141,6 +181,7 @@ export interface DashboardData {
   critical_alerts: CriticalAlert[];
   upcoming_maintenance: UpcomingMaintenance[];
   recent_agent_actions: AgentAction[];
+  automation: AutomationSummary;
 }
 
 export interface CriticalAlert {
@@ -168,24 +209,51 @@ export interface UpcomingMaintenance {
 
 export interface FleetScanResult {
   scanned_at: string;
+  triggered_by: string;
   vehicles_scanned: number;
   overdue_found: number;
   upcoming_found: number;
+  recalls_found: number;
   tasks_created: number;
   notifications_sent: number;
+  reminders_sent: number;
   findings: FleetScanFinding[];
+  digest: string | null;
+  digest_provider: string | null;
+  digest_email_status: NotificationStatus | null;
 }
 
 export interface FleetScanFinding {
-  type: 'OVERDUE' | 'UPCOMING';
+  type: 'OVERDUE' | 'UPCOMING' | 'RECALL';
   fleet_number: string;
   make: string;
   model: string;
   current_mileage: number;
   km_remaining?: number;
   km_overdue?: number;
+  recall_count?: number;
+  campaign_number?: string | null;
+  component?: string | null;
+  summary?: string | null;
+  remedy?: string | null;
+  severity?: IncidentSeverity;
   task_created: boolean;
   notification_sent: boolean;
+}
+
+export interface SchedulerStatus {
+  enabled: boolean;
+  running: boolean;
+  timezone: string;
+  cron: string;
+  interval_minutes: number;
+  external_token_configured: boolean;
+  jobs: { id: string; trigger: string; next_run_at: string | null }[];
+}
+
+export interface AutomationStatus {
+  scheduler: SchedulerStatus;
+  last_scan: LastScan | null;
 }
 
 export type AIProvider = 'groq' | 'gemini';
@@ -197,11 +265,19 @@ export interface AIProviderConfig {
   available: boolean;
 }
 
+export interface KeyValidation {
+  provider: string;
+  ok: boolean;
+  error?: string | null;
+  models: number;
+}
+
 export interface AISettings {
   provider: AIProvider;
   active_key_configured: boolean;
   groq: AIProviderConfig;
   gemini: AIProviderConfig;
+  validation?: KeyValidation;
 }
 
 export interface UpdateAISettingsPayload {

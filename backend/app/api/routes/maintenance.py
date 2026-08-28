@@ -1,16 +1,26 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
+from pydantic import BaseModel
+from typing import Optional
 from datetime import date
 import uuid
 
 from app.api.dependencies import get_db
 from app.database.models import (
-    MaintenanceTask, TaskStatus, Vehicle, Incident, IncidentStatus,
-    PartsRequest, Notification, NotificationChannel, NotificationStatus, AgentAction
+    MaintenanceTask, TaskStatus, Vehicle, VehicleStatus, Incident, IncidentStatus,
+    PartsRequest, PartsRequestStatus, MaintenanceRecord,
 )
 from app.integrations.notification import NotificationService
 
 router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
+
+SERVICE_INTERVAL_KM = 10_000
+
+
+class CompleteTaskRequest(BaseModel):
+    notes: Optional[str] = None
+    mileage: Optional[int] = None
 
 
 @router.get("")
@@ -21,7 +31,7 @@ def list_maintenance(db: Session = Depends(get_db)):
         .order_by(MaintenanceTask.created_at.desc())
         .all()
     )
-    return {"success": True, "data": [_task_with_vehicle(t, v, db) for t, v in tasks]}
+    return {"success": True, "data": [_task_with_vehicle(t, v) for t, v in tasks]}
 
 
 @router.get("/tasks/{task_id}")
@@ -53,15 +63,18 @@ def approve_task(task_id: str, db: Session = Depends(get_db)):
         if incident and incident.status == IncidentStatus.AWAITING_APPROVAL:
             incident.status = IncidentStatus.APPROVED
 
+    # Approved parts requests move to ORDERED
+    for part in task.parts_requests.filter(PartsRequest.status == PartsRequestStatus.REQUESTED).all():
+        part.status = PartsRequestStatus.ORDERED
+
     db.commit()
     db.refresh(task)
 
-    # Send approval notification
     vehicle = db.query(Vehicle).filter(Vehicle.id == task.vehicle_id).first()
-    svc = NotificationService(db)
-    svc.notify_task_approved(task, vehicle)
+    NotificationService(db).notify_task_approved(task, vehicle)
+    db.commit()
 
-    return {"success": True, "data": _task_detail(task)}
+    return {"success": True, "data": _task_with_vehicle(task, vehicle)}
 
 
 @router.post("/tasks/{task_id}/reject")
@@ -77,8 +90,99 @@ def reject_task(task_id: str, db: Session = Depends(get_db)):
         if incident:
             incident.status = IncidentStatus.REJECTED
 
+    for part in task.parts_requests.filter(PartsRequest.status == PartsRequestStatus.REQUESTED).all():
+        part.status = PartsRequestStatus.CANCELLED
+
     db.commit()
-    return {"success": True, "data": _task_detail(task)}
+    db.refresh(task)
+    vehicle = db.query(Vehicle).filter(Vehicle.id == task.vehicle_id).first()
+    return {"success": True, "data": _task_with_vehicle(task, vehicle)}
+
+
+@router.post("/tasks/{task_id}/start")
+def start_task(task_id: str, db: Session = Depends(get_db)):
+    task = _find_task(task_id, db)
+    if task.status not in (TaskStatus.APPROVED, TaskStatus.ASSIGNED):
+        raise HTTPException(status_code=400, detail={"code": "INVALID_STATE", "message": "Only approved tasks can be started."})
+
+    task.status = TaskStatus.IN_PROGRESS
+    if task.incident_id:
+        incident = db.query(Incident).filter(Incident.id == task.incident_id).first()
+        if incident and incident.status in (IncidentStatus.APPROVED, IncidentStatus.AWAITING_APPROVAL):
+            incident.status = IncidentStatus.IN_PROGRESS
+    db.commit()
+    db.refresh(task)
+    vehicle = db.query(Vehicle).filter(Vehicle.id == task.vehicle_id).first()
+    return {"success": True, "data": _task_with_vehicle(task, vehicle)}
+
+
+@router.post("/tasks/{task_id}/complete")
+def complete_task(task_id: str, payload: Optional[CompleteTaskRequest] = None, db: Session = Depends(get_db)):
+    """
+    Close the loop: record the work, resolve the incident, reset the service interval
+    for service tasks, and return the vehicle to ACTIVE once nothing else is open.
+    """
+    task = _find_task(task_id, db)
+    if task.status not in (TaskStatus.APPROVED, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+        raise HTTPException(status_code=400, detail={"code": "INVALID_STATE", "message": "Task must be approved or in progress to complete."})
+
+    vehicle = db.query(Vehicle).filter(Vehicle.id == task.vehicle_id).first()
+    notes = payload.notes if payload else None
+    if payload and payload.mileage and vehicle and payload.mileage > vehicle.mileage:
+        vehicle.mileage = payload.mileage
+
+    task.status = TaskStatus.COMPLETED
+
+    if vehicle:
+        db.add(MaintenanceRecord(
+            vehicle_id=vehicle.id,
+            maintenance_type=task.title[:100],
+            description=notes or task.description,
+            mileage=vehicle.mileage,
+            performed_at=date.today(),
+            status="COMPLETED",
+        ))
+        if "service" in task.title.lower():
+            vehicle.last_service_date = date.today()
+            vehicle.next_service_mileage = vehicle.mileage + SERVICE_INTERVAL_KM
+
+    for part in task.parts_requests.filter(PartsRequest.status.in_([PartsRequestStatus.REQUESTED, PartsRequestStatus.ORDERED])).all():
+        part.status = PartsRequestStatus.RECEIVED
+
+    if task.incident_id:
+        incident = db.query(Incident).filter(Incident.id == task.incident_id).first()
+        if incident and incident.status not in (IncidentStatus.REJECTED,):
+            incident.status = IncidentStatus.RESOLVED
+
+    db.flush()
+
+    vehicle_restored = False
+    if vehicle:
+        open_tasks = db.query(func.count(MaintenanceTask.id)).filter(
+            MaintenanceTask.vehicle_id == vehicle.id,
+            MaintenanceTask.status.not_in([TaskStatus.COMPLETED, TaskStatus.CANCELLED]),
+        ).scalar()
+        open_incidents = db.query(func.count(Incident.id)).filter(
+            Incident.vehicle_id == vehicle.id,
+            Incident.status.not_in([IncidentStatus.RESOLVED, IncidentStatus.REJECTED]),
+        ).scalar()
+        if open_tasks == 0 and open_incidents == 0 and vehicle.status != VehicleStatus.ACTIVE:
+            vehicle.status = VehicleStatus.ACTIVE
+            vehicle_restored = True
+
+    db.commit()
+    db.refresh(task)
+    NotificationService(db).notify_task_completed(task, vehicle, vehicle_restored)
+    db.commit()
+
+    return {
+        "success": True,
+        "data": {
+            **_task_with_vehicle(task, vehicle),
+            "vehicle_status": vehicle.status if vehicle else None,
+            "vehicle_restored": vehicle_restored,
+        },
+    }
 
 
 def _find_task(task_id: str, db: Session) -> MaintenanceTask:
@@ -109,8 +213,7 @@ def _task_detail(t: MaintenanceTask) -> dict:
     }
 
 
-def _task_with_vehicle(t: MaintenanceTask, v: Vehicle, db: Session) -> dict:
-    parts_count = t.parts_requests.count()
+def _task_with_vehicle(t: MaintenanceTask, v: Optional[Vehicle]) -> dict:
     return {
         **_task_detail(t),
         "vehicle": {
@@ -118,8 +221,8 @@ def _task_with_vehicle(t: MaintenanceTask, v: Vehicle, db: Session) -> dict:
             "make": v.make,
             "model": v.model,
             "year": v.year,
-        },
-        "parts_count": parts_count,
+        } if v else None,
+        "parts_count": t.parts_requests.count(),
     }
 
 

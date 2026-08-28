@@ -24,13 +24,16 @@ class RequiredPart(BaseModel):
 
 
 class IncidentAnalysis(BaseModel):
+    """Validated shape of the model's final verdict. The orchestrator normalizes the raw
+    tool arguments into this before anything is persisted."""
     category: IncidentCategory
     severity: str = Field(..., description="LOW | MEDIUM | HIGH | CRITICAL")
     vehicle_status: str = Field(..., description="ACTIVE | MAINTENANCE_DUE | OUT_OF_SERVICE")
-    summary: str = Field(..., description="Clear summary of the issue and recommended immediate action")
+    summary: str = Field(default="", description="Clear summary of the issue and recommended immediate action")
     possible_causes: list[str] = Field(default_factory=list)
     recommended_actions: list[str] = Field(default_factory=list)
     required_parts: list[RequiredPart] = Field(default_factory=list)
+    related_recalls: list[str] = Field(default_factory=list)
     requires_manager_approval: bool = False
 
 

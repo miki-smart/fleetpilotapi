@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Bot, Cpu, KeyRound, Check, RefreshCw, AlertTriangle, Zap } from 'lucide-react';
-import { getAISettings, updateAISettings, getAIModels } from '../services/api';
-import type { AISettings, AIProvider } from '../types';
+import { Bot, Cpu, KeyRound, Check, RefreshCw, AlertTriangle, Zap, ShieldCheck, RotateCcw } from 'lucide-react';
+import { getAISettings, updateAISettings, getAIModels, validateAIKey, resetAISettings } from '../services/api';
+import type { AISettings, AIProvider, KeyValidation } from '../types';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -18,6 +18,8 @@ export function Settings() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [validation, setValidation] = useState<KeyValidation | null>(null);
+  const [testing, setTesting] = useState(false);
 
   // Editable form state
   const [provider, setProvider] = useState<AIProvider>('groq');
@@ -60,6 +62,7 @@ export function Settings() {
     setModel(provider === 'groq' ? settings.groq.model : settings.gemini.model);
     setApiKey('');
     setCustomModel(false);
+    setValidation(null);
     const keyConfigured = provider === 'groq' ? settings.groq.key_configured : settings.gemini.key_configured;
     if (keyConfigured) {
       fetchModels(provider);
@@ -79,11 +82,41 @@ export function Settings() {
           : { provider, gemini_model: model || undefined, gemini_api_key: apiKey || undefined };
       const updated = await updateAISettings(payload);
       setSettings(updated);
+      setValidation(updated.validation ?? null);
       setApiKey('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+      if (updated.validation?.ok) fetchModels(provider);
     } catch (e: any) {
       setError(e.message ?? 'Failed to save settings.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    setError(null);
+    try {
+      setValidation(await validateAIKey(provider));
+    } catch (e: any) {
+      setError(e.message ?? 'Validation failed.');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleReset = async () => {
+    setSaving(true);
+    setError(null);
+    setValidation(null);
+    try {
+      const s = await resetAISettings();
+      setSettings(s);
+      setProvider(s.provider);
+      setApiKey('');
+    } catch (e: any) {
+      setError(e.message ?? 'Reset failed.');
     } finally {
       setSaving(false);
     }
@@ -96,7 +129,7 @@ export function Settings() {
   const activeProvider = settings.provider;
 
   return (
-    <div className="p-8 max-w-3xl">
+    <div className="p-4 md:p-8 max-w-3xl">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
           <Bot className="w-6 h-6 text-blue-600" />
@@ -247,10 +280,29 @@ export function Settings() {
           </div>
         )}
 
-        <div className="flex items-center gap-3">
+        {validation && (
+          <div className={`flex items-start gap-2 text-sm rounded-lg px-3 py-2 mb-4 border ${
+            validation.ok ? 'text-emerald-800 bg-emerald-50 border-emerald-200' : 'text-red-700 bg-red-50 border-red-200'
+          }`}>
+            {validation.ok ? <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />}
+            <span>
+              {validation.ok
+                ? <><span className="font-semibold">{validation.provider === 'groq' ? 'Groq' : 'Gemini'} key verified</span> — {validation.models} models available.</>
+                : <><span className="font-semibold">{validation.provider === 'groq' ? 'Groq' : 'Gemini'} key rejected:</span> {validation.error}</>}
+            </span>
+          </div>
+        )}
+
+        <div className="flex items-center gap-3 flex-wrap">
           <Button onClick={handleSave} loading={saving}>
             Save Settings
           </Button>
+          <Button variant="secondary" onClick={handleTest} loading={testing} className="flex items-center gap-1.5">
+            <ShieldCheck className="w-4 h-4" /> Test key
+          </Button>
+          <button onClick={handleReset} className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1" title="Forget Settings overrides and return to the .env configuration">
+            <RotateCcw className="w-3 h-3" /> Reset to .env
+          </button>
           {saved && (
             <span className="text-sm text-emerald-600 flex items-center gap-1">
               <Check className="w-4 h-4" /> Saved

@@ -44,6 +44,24 @@ export function taskStatusColor(status: TaskStatus): string {
   }
 }
 
+export function incidentStatusColor(status: string): string {
+  switch (status) {
+    case 'NEW': return 'text-slate-700 bg-slate-100 border-slate-200';
+    case 'ANALYZING': return 'text-blue-700 bg-blue-50 border-blue-200';
+    case 'AWAITING_APPROVAL': return 'text-amber-700 bg-amber-50 border-amber-200';
+    case 'APPROVED': return 'text-indigo-700 bg-indigo-50 border-indigo-200';
+    case 'IN_PROGRESS': return 'text-purple-700 bg-purple-50 border-purple-200';
+    case 'RESOLVED': return 'text-emerald-700 bg-emerald-50 border-emerald-200';
+    case 'REJECTED': return 'text-red-700 bg-red-50 border-red-200';
+    default: return 'text-slate-600 bg-slate-100 border-slate-200';
+  }
+}
+
+export function formatDateTime(dateStr?: string | null): string {
+  if (!dateStr) return '—';
+  return new Date(dateStr).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 export function formatMileage(km: number): string {
   return `${km.toLocaleString()} km`;
 }

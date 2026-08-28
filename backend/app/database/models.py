@@ -55,7 +55,6 @@ class PartsRequestStatus(str, PyEnum):
 class NotificationChannel(str, PyEnum):
     EMAIL = "EMAIL"
     IN_APP = "IN_APP"
-    TELEGRAM = "TELEGRAM"
 
 
 class NotificationStatus(str, PyEnum):
@@ -70,6 +69,7 @@ class AgentActionType(str, PyEnum):
     GET_VEHICLE = "GET_VEHICLE"
     GET_MAINTENANCE_HISTORY = "GET_MAINTENANCE_HISTORY"
     DECODE_VIN = "DECODE_VIN"
+    CHECK_RECALLS = "CHECK_RECALLS"
     CREATE_MAINTENANCE_TASK = "CREATE_MAINTENANCE_TASK"
     UPDATE_VEHICLE_STATUS = "UPDATE_VEHICLE_STATUS"
     CREATE_PARTS_REQUEST = "CREATE_PARTS_REQUEST"

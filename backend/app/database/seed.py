@@ -219,6 +219,16 @@ def seed(db: Session) -> None:
 
 
 if __name__ == "__main__":
+    # `--reset` drops every table first — handy for a clean demo database.
+    if "--reset" in sys.argv:
+        print("Dropping all tables (--reset)...")
+        Base.metadata.drop_all(bind=engine)
+        from sqlalchemy import text
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            for enum_name in ("vehiclestatus", "incidentseverity", "incidentstatus", "taskstatus",
+                              "partsrequeststatus", "notificationchannel", "notificationstatus",
+                              "agentactiontype", "agentactionstatus"):
+                conn.execute(text(f"DROP TYPE IF EXISTS {enum_name} CASCADE"))
     print("Creating database tables...")
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()

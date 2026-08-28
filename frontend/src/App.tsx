@@ -4,6 +4,7 @@ import { Dashboard } from './pages/Dashboard';
 import { Vehicles } from './pages/Vehicles';
 import { VehicleDetails } from './pages/VehicleDetails';
 import { Maintenance } from './pages/Maintenance';
+import { Incidents } from './pages/Incidents';
 import { AgentOperations } from './pages/AgentOperations';
 import { Notifications } from './pages/Notifications';
 import { Settings } from './pages/Settings';
@@ -16,6 +17,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/vehicles" element={<Vehicles />} />
           <Route path="/vehicles/:id" element={<VehicleDetails />} />
+          <Route path="/incidents" element={<Incidents />} />
           <Route path="/maintenance" element={<Maintenance />} />
           <Route path="/agent" element={<AgentOperations />} />
           <Route path="/notifications" element={<Notifications />} />

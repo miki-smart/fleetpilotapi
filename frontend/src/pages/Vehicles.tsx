@@ -40,7 +40,7 @@ export function Vehicles() {
   if (loading) return <LoadingScreen />;
 
   return (
-    <div className="p-8">
+    <div className="p-4 md:p-8">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-900">Fleet Vehicles</h1>
         <p className="text-slate-500 text-sm mt-1">{vehicles.length} vehicles registered</p>

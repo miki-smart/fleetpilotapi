@@ -72,7 +72,7 @@ export function VehicleDetails() {
   if (error || !data) return <div className="p-8 text-red-600">Vehicle not found.</div>;
 
   return (
-    <div className="p-8">
+    <div className="p-4 md:p-8">
       <Link to="/vehicles" className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 mb-6">
         <ArrowLeft className="w-4 h-4" />
         Back to Fleet

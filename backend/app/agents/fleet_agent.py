@@ -1,6 +1,19 @@
 """
-Fleet agent tool definitions for Gemini function calling.
+Fleet agent tool definitions (JSON-Schema style).
+
+Consumed by both the Gemini function-calling adapter and the Groq/OpenAI-compatible
+adapter. Every array of objects declares its item properties explicitly — Gemini
+rejects OBJECT schemas with no properties.
 """
+
+PART_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "description": "Part name, e.g. 'Brake pads (front)'."},
+        "quantity": {"type": "integer", "description": "Quantity required (default 1)."},
+    },
+    "required": ["name"],
+}
 
 AGENT_TOOL_DEFINITIONS = [
     {
@@ -9,10 +22,7 @@ AGENT_TOOL_DEFINITIONS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "fleet_number": {
-                    "type": "string",
-                    "description": "The vehicle fleet number, e.g. ET-042",
-                },
+                "fleet_number": {"type": "string", "description": "The vehicle fleet number, e.g. ET-042"},
             },
             "required": ["fleet_number"],
         },
@@ -23,12 +33,41 @@ AGENT_TOOL_DEFINITIONS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "vehicle_id": {
-                    "type": "string",
-                    "description": "The vehicle UUID returned by get_vehicle.",
-                },
+                "vehicle_id": {"type": "string", "description": "The vehicle UUID returned by get_vehicle."},
             },
             "required": ["vehicle_id"],
+        },
+    },
+    {
+        "name": "decode_vin",
+        "description": (
+            "Decode a 17-character VIN with the NHTSA vPIC API to get manufacturer specifications "
+            "(body class, engine displacement, drive type, fuel type, GVWR class). Use it to confirm "
+            "the vehicle's identity or when the fleet record lacks technical detail."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "vin": {"type": "string", "description": "17-character VIN from the vehicle record."},
+            },
+            "required": ["vin"],
+        },
+    },
+    {
+        "name": "check_safety_recalls",
+        "description": (
+            "Look up open NHTSA safety recall campaigns for a make/model/year. Use it to check whether "
+            "the reported symptom matches a known manufacturer defect (e.g. a brake complaint on a "
+            "vehicle with an open brake recall)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "make": {"type": "string", "description": "Manufacturer, e.g. Ford"},
+                "model": {"type": "string", "description": "Model, e.g. Transit"},
+                "year": {"type": "integer", "description": "Model year, e.g. 2020"},
+            },
+            "required": ["make", "model", "year"],
         },
     },
     {
@@ -67,8 +106,8 @@ AGENT_TOOL_DEFINITIONS = [
                 "task_id": {"type": "string", "description": "Maintenance task UUID."},
                 "parts": {
                     "type": "array",
-                    "description": "List of parts needed. Each item has 'name' (string) and 'quantity' (integer).",
-                    "items": {"type": "object"},
+                    "description": "List of parts needed.",
+                    "items": PART_ITEM_SCHEMA,
                 },
             },
             "required": ["task_id", "parts"],
@@ -76,11 +115,14 @@ AGENT_TOOL_DEFINITIONS = [
     },
     {
         "name": "send_notification",
-        "description": "Send a notification to the fleet manager or mechanic.",
+        "description": (
+            "Notify a stakeholder. Use channel EMAIL with recipient 'Fleet Manager' for CRITICAL and HIGH "
+            "incidents — the backend resolves the manager's address. Use IN_APP for informational updates."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "recipient": {"type": "string", "description": "Recipient name or email."},
+                "recipient": {"type": "string", "description": "Recipient role or email, e.g. 'Fleet Manager'."},
                 "subject": {"type": "string", "description": "Notification subject."},
                 "message": {"type": "string", "description": "Notification message body."},
                 "channel": {"type": "string", "description": "EMAIL | IN_APP"},
@@ -108,10 +150,11 @@ AGENT_TOOL_DEFINITIONS = [
                 "summary": {"type": "string", "description": "Clear summary of the assessment."},
                 "possible_causes": {"type": "array", "items": {"type": "string"}, "description": "Likely causes of the reported symptoms."},
                 "recommended_actions": {"type": "array", "items": {"type": "string"}, "description": "Actions the workshop should take."},
-                "required_parts": {
+                "required_parts": {"type": "array", "description": "Parts needed for the repair.", "items": PART_ITEM_SCHEMA},
+                "related_recalls": {
                     "type": "array",
-                    "description": "Parts needed. Each item has 'name' (string) and 'quantity' (integer).",
-                    "items": {"type": "object"},
+                    "items": {"type": "string"},
+                    "description": "NHTSA campaign numbers from check_safety_recalls that plausibly relate to the reported symptom.",
                 },
                 "requires_manager_approval": {"type": "boolean", "description": "Whether a fleet manager must approve before work proceeds."},
             },

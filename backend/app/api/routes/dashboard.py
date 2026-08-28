@@ -5,7 +5,7 @@ from datetime import date
 from app.api.dependencies import get_db
 from app.database.models import (
     Vehicle, VehicleStatus, Incident, IncidentSeverity, IncidentStatus,
-    MaintenanceTask, TaskStatus, AgentAction
+    MaintenanceTask, TaskStatus, AgentAction, AgentActionType
 )
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -61,6 +61,18 @@ def get_dashboard(db: Session = Depends(get_db)):
         MaintenanceTask.status == TaskStatus.PENDING_APPROVAL
     ).scalar()
 
+    # Proactive automation: last scan + next scheduled run
+    from app.api.routes.automation import _last_scan
+    from app.automation.scheduler import scheduler_status
+    last_scan = (
+        db.query(AgentAction)
+        .filter(AgentAction.action_type == AgentActionType.FLEET_HEALTH_SCAN)
+        .order_by(AgentAction.created_at.desc())
+        .first()
+    )
+    sched = scheduler_status()
+    next_runs = [j["next_run_at"] for j in sched["jobs"] if j["next_run_at"]]
+
     return {
         "success": True,
         "data": {
@@ -111,6 +123,13 @@ def get_dashboard(db: Session = Depends(get_db)):
                 }
                 for a in recent_actions
             ],
+            "automation": {
+                "last_scan": _last_scan(last_scan),
+                "next_run_at": min(next_runs) if next_runs else None,
+                "schedule_cron": sched["cron"],
+                "timezone": sched["timezone"],
+                "scheduler_running": sched["running"],
+            },
         },
     }
 

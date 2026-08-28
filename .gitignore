@@ -31,3 +31,6 @@ secrets/
 
 # Build artifacts
 *.tsbuildinfo
+
+# Runtime AI settings saved from the Settings page (contains API keys)
+backend/.runtime/

@@ -30,6 +30,23 @@ def groq_is_configured() -> bool:
     return GROQ_AVAILABLE and bool(get_ai_config().groq_api_key)
 
 
+def check_groq_key() -> tuple[bool, Optional[str], int]:
+    """Validate the configured key with a cheap models.list call."""
+    if not GROQ_AVAILABLE:
+        return False, "groq SDK not installed.", 0
+    cfg = get_ai_config()
+    if not cfg.groq_api_key:
+        return False, "No Groq API key configured.", 0
+    try:
+        client = Groq(api_key=cfg.groq_api_key)
+        return True, None, len(client.models.list().data)
+    except Exception as e:
+        text = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+        if "401" in text or "invalid_api_key" in text.lower() or "Invalid API Key" in text:
+            return False, "Groq rejected this key as invalid (401).", 0
+        return False, text[:220], 0
+
+
 def list_groq_models() -> list[str]:
     """Return tool-capable chat models available for the current Groq key."""
     if not GROQ_AVAILABLE:
@@ -48,6 +65,28 @@ def list_groq_models() -> list[str]:
         logger.warning("groq_list_models_error", error=str(e)[:200])
         return []
 
+
+
+async def generate_text(system_prompt: str, user_message: str, max_tokens: int = 1500) -> Optional[str]:
+    """Plain text generation (no tools) — used for the fleet digest."""
+    if not groq_is_configured():
+        return None
+    cfg = get_ai_config()
+    client = AsyncGroq(api_key=cfg.groq_api_key, timeout=REQUEST_TIMEOUT_SECONDS)
+    try:
+        response = await client.chat.completions.create(
+            model=cfg.groq_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=0.2,
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        logger.warning("groq_generate_error", error=str(e)[:300])
+        return None
 
 
 def _build_groq_tools(tool_definitions: list[dict]) -> list[dict]:

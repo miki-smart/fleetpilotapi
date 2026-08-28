@@ -1,24 +1,32 @@
 """
-Tool definitions for the FleetPilot agent.
-Each function returns data that the agent can use for reasoning.
-Gemini never accesses the database directly — only through these typed tool handlers.
+Tool handlers for the FleetPilot agent.
+The model never touches the database or external APIs directly — only through these
+typed handlers, which validate every argument and return plain-dict results.
 """
-from datetime import datetime, date
+from datetime import date
 from typing import Optional
 from sqlalchemy.orm import Session
 from app.database.models import (
-    Vehicle, MaintenanceRecord, Incident, MaintenanceTask, PartsRequest,
-    Notification, AgentAction,
+    Vehicle, MaintenanceRecord, MaintenanceTask, PartsRequest,
     VehicleStatus, IncidentSeverity, TaskStatus, PartsRequestStatus,
-    NotificationChannel, NotificationStatus, AgentActionType, AgentActionStatus,
+    NotificationChannel, NotificationStatus,
 )
+from app.integrations.nhtsa import decode_vin_sync, get_recalls_sync
 from app.core.logging import get_logger
 import uuid
 
 logger = get_logger(__name__)
 
 
-# --- Tool handler implementations ---
+def _to_int(value, default: int) -> int:
+    """LLM arguments arrive as int, float (Gemini) or string — coerce defensively."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+# --- read tools ----------------------------------------------------------------
 
 def tool_get_vehicle(fleet_number: str, db: Session) -> dict:
     vehicle = db.query(Vehicle).filter(Vehicle.fleet_number == fleet_number).first()
@@ -68,6 +76,23 @@ def tool_get_maintenance_history(vehicle_id: str, db: Session) -> dict:
     }
 
 
+def tool_decode_vin(vin: str, db: Session) -> dict:
+    """NHTSA vPIC lookup. Also backfills fuel_type on the fleet record when it is missing."""
+    result = decode_vin_sync(vin)
+    if result.get("make") and db is not None:
+        vehicle = db.query(Vehicle).filter(Vehicle.vin == result["vin"]).first()
+        if vehicle and not vehicle.fuel_type and result.get("fuel_type"):
+            vehicle.fuel_type = result["fuel_type"][:20]
+            db.flush()
+    return result
+
+
+def tool_check_recalls(make: str, model: str, year) -> dict:
+    return get_recalls_sync(make, model, _to_int(year, 0))
+
+
+# --- write tools ---------------------------------------------------------------
+
 def tool_create_maintenance_task(
     vehicle_id: str,
     incident_id: Optional[str],
@@ -88,7 +113,7 @@ def tool_create_maintenance_task(
     # Validate severity
     try:
         sev = IncidentSeverity(severity.upper())
-    except ValueError:
+    except (ValueError, AttributeError):
         return {"success": False, "error": f"Invalid severity '{severity}'."}
 
     # Business rule: CRITICAL/HIGH requires human approval
@@ -104,7 +129,7 @@ def tool_create_maintenance_task(
     task = MaintenanceTask(
         vehicle_id=v_uid,
         incident_id=inc_uid,
-        title=title,
+        title=title[:200],
         description=description,
         severity=sev,
         status=status,
@@ -135,7 +160,7 @@ def tool_update_vehicle_status(vehicle_id: str, new_status: str, db: Session) ->
 
     try:
         status = VehicleStatus(new_status.upper())
-    except ValueError:
+    except (ValueError, AttributeError):
         return {"success": False, "error": f"Invalid status '{new_status}'."}
 
     old_status = vehicle.status.value
@@ -165,15 +190,17 @@ def tool_create_parts_request(
         return {"success": False, "error": f"Task {task_id} not found."}
 
     created = []
-    for part in parts:
-        name = part.get("name", "").strip()
-        qty = int(part.get("quantity", 1))
+    for part in parts or []:
+        if isinstance(part, str):
+            part = {"name": part}
+        name = str(part.get("name", "")).strip()
+        qty = max(1, _to_int(part.get("quantity", 1), 1))
         if not name:
             continue
         priority = "HIGH" if task.severity in [IncidentSeverity.CRITICAL, IncidentSeverity.HIGH] else "NORMAL"
         pr = PartsRequest(
             maintenance_task_id=t_uid,
-            part_name=name,
+            part_name=name[:200],
             quantity=qty,
             priority=priority,
             status=PartsRequestStatus.REQUESTED,
@@ -197,7 +224,7 @@ def tool_send_notification(
     from app.integrations.notification import NotificationService
     svc = NotificationService(db)
     try:
-        ch = NotificationChannel(channel.upper())
+        ch = NotificationChannel((channel or "IN_APP").upper())
     except ValueError:
         ch = NotificationChannel.IN_APP
 
@@ -212,97 +239,7 @@ def tool_send_notification(
     return {
         "success": notification.status in [NotificationStatus.SENT, NotificationStatus.SIMULATED],
         "notification_id": str(notification.id),
+        "channel": ch.value,
+        "recipient": notification.recipient,
         "status": notification.status.value,
-    }
-
-
-def tool_record_agent_action(
-    incident_id: Optional[str],
-    action_type: str,
-    description: str,
-    tool_name: str,
-    tool_input: Optional[dict],
-    tool_output: Optional[dict],
-    status: str = "SUCCESS",
-    db: Session = None,
-) -> dict:
-    try:
-        act_type = AgentActionType(action_type)
-    except ValueError:
-        act_type = AgentActionType.ANALYZE_INCIDENT
-
-    act_status = AgentActionStatus.SUCCESS if status == "SUCCESS" else AgentActionStatus.FAILED
-
-    inc_uid = None
-    if incident_id:
-        try:
-            inc_uid = uuid.UUID(incident_id)
-        except ValueError:
-            pass
-
-    action = AgentAction(
-        incident_id=inc_uid,
-        action_type=act_type,
-        description=description,
-        status=act_status,
-        tool_name=tool_name,
-        tool_input=tool_input,
-        tool_output=tool_output,
-        completed_at=datetime.utcnow(),
-    )
-    db.add(action)
-    db.flush()
-    return {"success": True, "action_id": str(action.id)}
-
-
-def tool_get_fleet_health(db: Session) -> dict:
-    from sqlalchemy import func
-    from app.database.models import IncidentStatus
-    total = db.query(func.count(Vehicle.id)).scalar()
-    active = db.query(func.count(Vehicle.id)).filter(Vehicle.status == VehicleStatus.ACTIVE).scalar()
-    maint_due = db.query(func.count(Vehicle.id)).filter(Vehicle.status == VehicleStatus.MAINTENANCE_DUE).scalar()
-    oos = db.query(func.count(Vehicle.id)).filter(Vehicle.status == VehicleStatus.OUT_OF_SERVICE).scalar()
-    unresolved_critical = db.query(func.count(Incident.id)).filter(
-        Incident.severity == IncidentSeverity.CRITICAL,
-        Incident.status.not_in([IncidentStatus.RESOLVED, IncidentStatus.REJECTED]),
-    ).scalar()
-    return {
-        "total_vehicles": total,
-        "active": active,
-        "maintenance_due": maint_due,
-        "out_of_service": oos,
-        "unresolved_critical_incidents": unresolved_critical,
-    }
-
-
-def tool_get_upcoming_maintenance(db: Session) -> dict:
-    vehicles = (
-        db.query(Vehicle)
-        .filter(
-            Vehicle.next_service_mileage.isnot(None),
-            Vehicle.status != VehicleStatus.OUT_OF_SERVICE,
-        )
-        .all()
-    )
-    overdue = []
-    upcoming = []
-    for v in vehicles:
-        km_left = v.next_service_mileage - v.mileage
-        entry = {
-            "fleet_number": v.fleet_number,
-            "make": v.make,
-            "model": v.model,
-            "current_mileage": v.mileage,
-            "next_service_mileage": v.next_service_mileage,
-            "km_until_service": km_left,
-            "vehicle_id": str(v.id),
-        }
-        if km_left <= 0:
-            overdue.append(entry)
-        elif km_left <= 5000:
-            upcoming.append(entry)
-
-    return {
-        "overdue": sorted(overdue, key=lambda x: x["km_until_service"]),
-        "upcoming_within_5000km": sorted(upcoming, key=lambda x: x["km_until_service"]),
     }

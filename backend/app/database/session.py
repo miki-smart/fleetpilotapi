@@ -6,7 +6,7 @@ settings = get_settings()
 
 engine = create_engine(
     settings.database_url,
-    echo=settings.is_development,
+    echo=False,  # SQL echo drowns the agent logs; enable ad hoc when debugging queries
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
